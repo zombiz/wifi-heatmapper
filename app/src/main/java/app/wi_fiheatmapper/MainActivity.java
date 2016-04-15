@@ -7,6 +7,8 @@ import android.net.wifi.ScanResult;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
+import android.view.View;
+import android.widget.TextView;
 
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
@@ -15,6 +17,7 @@ import com.google.android.gms.maps.model.Circle;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -22,6 +25,16 @@ import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
+    private static final int[] LEGEND_LABEL_VIEWS = new int[]{R.id.legend_label_1,
+                                                              R.id.legend_label_2,
+                                                              R.id.legend_label_3,
+                                                              R.id.legend_label_4,
+                                                              R.id.legend_label_5};
+    private static final int[] LEGEND_COLOR_VIEWS = new int[]{R.id.legend_color_1,
+                                                              R.id.legend_color_2,
+                                                              R.id.legend_color_3,
+                                                              R.id.legend_color_4,
+                                                              R.id.legend_color_5};
     private final SurveyingService.SurveyingServiceConnection mSurveyingServiceConnection
             = new SurveyingService.SurveyingServiceConnection(new SurveyingServiceListener());
     private final Map<Location, Circle> mCirclesMap = new HashMap<>();
@@ -41,13 +54,13 @@ public class MainActivity extends AppCompatActivity {
             SsidPickerDialog dialog = SsidPickerDialog.newInstance(new SsidSelectedCallback());
             dialog.show(getSupportFragmentManager(), SsidPickerDialog.TAG);
         }
-
-        startService(new Intent(this, SurveyingService.class));
     }
 
     @Override
     public void onStart() {
         super.onStart();
+
+        startService(new Intent(this, SurveyingService.class));
 
         mSurveyingServiceConnection.bound(this);
     }
@@ -57,13 +70,10 @@ public class MainActivity extends AppCompatActivity {
         super.onStop();
 
         mSurveyingServiceConnection.unbound(this);
-    }
 
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-
-        stopService(new Intent(this, SurveyingService.class));
+        if (isFinishing()) {
+            stopService(new Intent(this, SurveyingService.class));
+        }
     }
 
     private void showLastLocation() {
@@ -92,6 +102,8 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onHeatmapDataUpdated(Map<Location, Integer> heatmapData) {
+            updateLegend(heatmapData.values());
+
             if (heatmapData.isEmpty()) return;
 
             int min = Collections.max(heatmapData.values());
@@ -102,7 +114,7 @@ public class MainActivity extends AppCompatActivity {
                 Circle circle = mCirclesMap.get(loc);
                 if (circle == null) {
                     CircleOptions circleOptions = new CircleOptions().center(locationToLatLng(loc))
-                                                                     .radius(getResources().getInteger(R.integer.radius) / 2d)
+                                                                     .radius(getResources().getInteger(R.integer.diameter) / 2d)
                                                                      .strokeWidth(0);
                     circle = mMap.addCircle(circleOptions);
                     mCirclesMap.put(loc, circle);
@@ -116,21 +128,57 @@ public class MainActivity extends AppCompatActivity {
                 } else {
                     signalLoss = (entry.getValue() - min) / (double) (max - min);
                 }
-                int red = 0xFF;
-                int green = 0xFF;
-                if (signalLoss >= 0.5) {
-                    // to half add green to make orange
-                    green = (int) ((1 - signalLoss) * 0xFF / 0.5);
-                } else {    // signalLoss < 0.5
-                    // from half substract red to make green
-                    red = (int) ((signalLoss) * 0xFF / 0.5);
-                }
-
-                int color = Color.rgb(red, green, 0);
+                int color = generateColor(signalLoss);
                 if (circle.getFillColor() != color) {
                     circle.setFillColor(color);
                 }
             }
+        }
+
+        private void updateLegend(Collection<Integer> signalValues) {
+            View legendLayout = findViewById(R.id.legend_layout);
+
+            if (signalValues.isEmpty()) {
+                if (legendLayout != null) {
+                    legendLayout.setVisibility(View.GONE);
+                }
+                return;
+            }
+
+            int min = Collections.max(signalValues);
+            int max = Collections.min(signalValues);
+
+            double legendCount = LEGEND_LABEL_VIEWS.length;
+            if (legendLayout != null) {
+                legendLayout.setVisibility(View.VISIBLE);
+                for (int i = 0; i < legendCount; i++) {
+                    int signalStrength = (int) ((max - min) * i / (legendCount - 1)) + min;
+                    int color = generateColor(i / (legendCount - 1));
+
+                    TextView labelTv = (TextView) legendLayout.findViewById(LEGEND_LABEL_VIEWS[i]);
+                    if (labelTv != null) {
+                        String label = String.format(getString(R.string.signal_strength), signalStrength);
+                        labelTv.setText(label);
+                    }
+
+                    View colorView = legendLayout.findViewById(LEGEND_COLOR_VIEWS[i]);
+                    if (colorView != null) colorView.setBackgroundColor(color);
+                }
+            }
+        }
+
+        private int generateColor(double signalLoss) {
+            int red = 0xFF;
+            int green = 0xFF;
+            if (signalLoss >= 0.5) {
+                // to half add green to make orange
+                green = (int) ((1 - signalLoss) * 0xFF / 0.5);
+            } else {    // signalLoss < 0.5
+                // from half substract red to make green
+                red = (int) ((signalLoss) * 0xFF / 0.5);
+            }
+
+            return Color.rgb(red, green, 0);
         }
 
         @Override
