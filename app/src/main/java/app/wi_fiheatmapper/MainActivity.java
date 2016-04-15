@@ -17,12 +17,16 @@ import com.google.android.gms.maps.model.Circle;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Acitivity show RSSI heatmap of selected network on map.
+ */
 public class MainActivity extends AppCompatActivity {
 
     private static final int[] LEGEND_LABEL_VIEWS = new int[]{R.id.legend_label_1,
@@ -30,14 +34,20 @@ public class MainActivity extends AppCompatActivity {
                                                               R.id.legend_label_3,
                                                               R.id.legend_label_4,
                                                               R.id.legend_label_5};
+
     private static final int[] LEGEND_COLOR_VIEWS = new int[]{R.id.legend_color_1,
                                                               R.id.legend_color_2,
                                                               R.id.legend_color_3,
                                                               R.id.legend_color_4,
                                                               R.id.legend_color_5};
+
     private final SurveyingService.SurveyingServiceConnection mSurveyingServiceConnection
             = new SurveyingService.SurveyingServiceConnection(new SurveyingServiceListener());
-    private final Map<Location, Circle> mCirclesMap = new HashMap<>();
+    /**
+     * Map hold for circles drawed on map for corresponding location.
+     */
+    private final Map<Location, Circle> mLocToCircleMap = new HashMap<>();
+
     private GoogleMap mMap;
 
     @Override
@@ -49,7 +59,7 @@ public class MainActivity extends AppCompatActivity {
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(new MapReadyCallback());
 
-
+        // Show dialog only if this is new launch.
         if (savedInstanceState == null) {
             SsidPickerDialog dialog = SsidPickerDialog.newInstance(new SsidSelectedCallback());
             dialog.show(getSupportFragmentManager(), SsidPickerDialog.TAG);
@@ -60,8 +70,9 @@ public class MainActivity extends AppCompatActivity {
     public void onStart() {
         super.onStart();
 
+        // Start service for network surveying....
         startService(new Intent(this, SurveyingService.class));
-
+        // ....and bound to it for getting events.
         mSurveyingServiceConnection.bound(this);
     }
 
@@ -71,11 +82,15 @@ public class MainActivity extends AppCompatActivity {
 
         mSurveyingServiceConnection.unbound(this);
 
+        // Stop service only if app is terminated.
         if (isFinishing()) {
             stopService(new Intent(this, SurveyingService.class));
         }
     }
 
+    /**
+     * Get and show last known location.
+     */
     private void showLastLocation() {
         if (mSurveyingServiceConnection.getService() != null) {
             Location loc = mSurveyingServiceConnection.getService().getLastLocation();
@@ -83,6 +98,11 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Show desired location.
+     *
+     * @param loc Location to show.
+     */
     private void showLocation(Location loc) {
         if (loc != null && mMap != null) {
             LatLng latLng = locationToLatLng(loc);
@@ -90,106 +110,184 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Draw haetmap on map.
+     *
+     * @param heatmapData Data for drawing heatmap. RSSI on location.
+     */
+    private void repaintMap(Map<Location, Integer> heatmapData) {
+        if (heatmapData.isEmpty()) return;
+
+        // Count only with valid RSSI values.
+        Collection<Integer> values = new ArrayList<>(heatmapData.values());
+        values.removeAll(Collections.singleton(Integer.MIN_VALUE));
+        if (values.isEmpty()) return;
+
+        int maxRssi = Collections.max(values);
+        int minRssi = Collections.min(values);
+
+        for (Map.Entry<Location, Integer> entry : heatmapData.entrySet()) {
+            Location loc = entry.getKey();
+            Integer rssi = entry.getValue();
+            Circle circle = mLocToCircleMap.get(loc);
+
+            // If signal lost on current place remove it from map.
+            if (rssi == Integer.MIN_VALUE) {
+                if (circle != null) {
+                    circle.remove();
+                    mLocToCircleMap.remove(loc);
+                }
+
+                // This signal is lost, nothing to draw.
+                continue;
+            }
+
+            // Create circle for new location.
+            if (circle == null) {
+                CircleOptions circleOptions = new CircleOptions().center(locationToLatLng(loc))
+                                                                 .radius(getResources().getInteger(R.integer.diameter) / 2d)
+                                                                 .strokeWidth(0);
+                circle = mMap.addCircle(circleOptions);
+                mLocToCircleMap.put(loc, circle);
+            }
+
+            // Signal strenght relative to range of currently collected RSSIs.
+            // 0 = strongest signal
+            // 1 = weakest signal
+            double relativeSignalStrenght;
+            if (minRssi - maxRssi == 0) {
+                relativeSignalStrenght = 0.5;
+            } else {
+                relativeSignalStrenght = (rssi - maxRssi) / (double) (minRssi - maxRssi);
+            }
+
+            int color = generateColor(relativeSignalStrenght);
+            if (circle.getFillColor() != color) {
+                circle.setFillColor(color);
+            }
+        }
+    }
+
+    /**
+     * Compute and show color legend for drawed data.
+     * Collected RSSI range is divided on n part and each part have color corresponding to RSSI value.
+     *
+     * @param rssis Collection of RSSIs.
+     */
+    private void repaintLegend(Collection<Integer> rssis) {
+        View legendLayout = findViewById(R.id.legend_layout);
+
+        // Count only with valid RSSI values.
+        Collection<Integer> values = new ArrayList<>(rssis);
+        values.removeAll(Collections.singleton(Integer.MIN_VALUE));
+        if (values.isEmpty()) {
+            // Hide legend of no data available.
+            if (legendLayout != null) {
+                legendLayout.setVisibility(View.GONE);
+            }
+            return;
+        }
+
+        int maxRssi = Collections.max(values);
+        int minRssi = Collections.min(values);
+
+        double legendCount = LEGEND_LABEL_VIEWS.length;
+        if (legendLayout != null) {
+            legendLayout.setVisibility(View.VISIBLE);
+            for (int i = 0; i < legendCount; i++) {
+                // Divide RSSI range to parts and get color for this parts.
+                int signalStrength = (int) ((minRssi - maxRssi) * i / (legendCount - 1)) + maxRssi;
+                int color = generateColor(i / (legendCount - 1));
+
+                View labelTv = legendLayout.findViewById(LEGEND_LABEL_VIEWS[i]);
+                if (labelTv instanceof TextView) {
+                    String label = String.format(getString(R.string.signal_strength), signalStrength);
+                    ((TextView) labelTv).setText(label);
+                }
+
+                View colorView = legendLayout.findViewById(LEGEND_COLOR_VIEWS[i]);
+                if (colorView != null) colorView.setBackgroundColor(color);
+            }
+        }
+    }
+
+    /**
+     * Show info about currently surveyed network.
+     *
+     * @param surveyedSsid SSID of surveyed network.
+     * @param lastRssi     Last RSSI for this network.
+     */
+    private void repaintSurveyedWiFiInfo(String surveyedSsid, int lastRssi) {
+        View legendLayout = findViewById(R.id.legend_layout);
+        if (legendLayout != null) {
+            View currentWifiTv = legendLayout.findViewById(R.id.legend_current_wifi);
+            if (currentWifiTv instanceof TextView) {
+                String signalString;
+                if (lastRssi == Integer.MIN_VALUE) {
+                    signalString = String.format(getString(R.string.network_not_in_range), surveyedSsid);
+                } else {
+                    signalString = String.format(getString(R.string.current_wifi), surveyedSsid,
+                                                 lastRssi);
+                }
+                ((TextView) currentWifiTv).setText(signalString);
+            }
+        }
+    }
+
+    private int generateColor(double relativeSignal) {
+        int red = 0xFF;
+        int green = 0xFF;
+        if (relativeSignal >= 0.5) {
+            // To half of range add green to red to make orange.
+            green = (int) ((1 - relativeSignal) * 0xFF / 0.5);
+        } else {
+            // From half substract red from green to make full green.
+            red = (int) ((relativeSignal) * 0xFF / 0.5);
+        }
+
+        return Color.rgb(red, green, 0);
+    }
+
+    /**
+     * Helper to transform {@link Location} to {@link LatLng}.
+     *
+     * @param location Location to transform
+     * @return Transformed location
+     */
     @NonNull
-    private LatLng locationToLatLng(Location loc) {
-        return new LatLng(loc.getLatitude(), loc.getLongitude());
+    private LatLng locationToLatLng(Location location) {
+        return new LatLng(location.getLatitude(), location.getLongitude());
     }
 
     private class SurveyingServiceListener implements SurveyingService.ServiceListener {
         @Override
-        public void onScanCompleted(List<ScanResult> scanResults) {
+        public void onWiFiScanCompleted(List<ScanResult> scanResults) {
         }
 
         @Override
         public void onHeatmapDataUpdated(Map<Location, Integer> heatmapData) {
-            updateLegend(heatmapData.values());
-
-            if (heatmapData.isEmpty()) return;
-
-            int min = Collections.max(heatmapData.values());
-            int max = Collections.min(heatmapData.values());
-
-            for (Map.Entry<Location, Integer> entry : heatmapData.entrySet()) {
-                Location loc = entry.getKey();
-                Circle circle = mCirclesMap.get(loc);
-                if (circle == null) {
-                    CircleOptions circleOptions = new CircleOptions().center(locationToLatLng(loc))
-                                                                     .radius(getResources().getInteger(R.integer.diameter) / 2d)
-                                                                     .strokeWidth(0);
-                    circle = mMap.addCircle(circleOptions);
-                    mCirclesMap.put(loc, circle);
-                }
-
-                // 0 = full signal
-                // 1 = no signal
-                double signalLoss;
-                if (max - min == 0) {
-                    signalLoss = 0.5;
-                } else {
-                    signalLoss = (entry.getValue() - min) / (double) (max - min);
-                }
-                int color = generateColor(signalLoss);
-                if (circle.getFillColor() != color) {
-                    circle.setFillColor(color);
-                }
-            }
-        }
-
-        private void updateLegend(Collection<Integer> signalValues) {
-            View legendLayout = findViewById(R.id.legend_layout);
-
-            if (signalValues.isEmpty()) {
-                if (legendLayout != null) {
-                    legendLayout.setVisibility(View.GONE);
-                }
-                return;
-            }
-
-            int min = Collections.max(signalValues);
-            int max = Collections.min(signalValues);
-
-            double legendCount = LEGEND_LABEL_VIEWS.length;
-            if (legendLayout != null) {
-                legendLayout.setVisibility(View.VISIBLE);
-                for (int i = 0; i < legendCount; i++) {
-                    int signalStrength = (int) ((max - min) * i / (legendCount - 1)) + min;
-                    int color = generateColor(i / (legendCount - 1));
-
-                    TextView labelTv = (TextView) legendLayout.findViewById(LEGEND_LABEL_VIEWS[i]);
-                    if (labelTv != null) {
-                        String label = String.format(getString(R.string.signal_strength), signalStrength);
-                        labelTv.setText(label);
-                    }
-
-                    View colorView = legendLayout.findViewById(LEGEND_COLOR_VIEWS[i]);
-                    if (colorView != null) colorView.setBackgroundColor(color);
-                }
-            }
-        }
-
-        private int generateColor(double signalLoss) {
-            int red = 0xFF;
-            int green = 0xFF;
-            if (signalLoss >= 0.5) {
-                // to half add green to make orange
-                green = (int) ((1 - signalLoss) * 0xFF / 0.5);
-            } else {    // signalLoss < 0.5
-                // from half substract red to make green
-                red = (int) ((signalLoss) * 0xFF / 0.5);
-            }
-
-            return Color.rgb(red, green, 0);
+            repaintLegend(heatmapData.values());
+            repaintMap(heatmapData);
         }
 
         @Override
-        public void onLocationUpdated(Location location) {
+        public void onLastLocationUpdated(Location location) {
             showLocation(location);
+        }
+
+        @Override
+        public void onSurveyedWiFiUpdated(String surveyedSsid, int rssi) {
+            repaintSurveyedWiFiInfo(surveyedSsid, rssi);
         }
     }
 
+    /**
+     * Callback for SSID picker dialog.
+     */
     private class SsidSelectedCallback implements SsidPickerDialog.DialogCallback {
         @Override
         public void onSsidSelected(String ssid) {
+            // Start surveying selected network.
             if (mSurveyingServiceConnection.getService() != null) {
                 mSurveyingServiceConnection.getService().surveySsid(ssid);
             }

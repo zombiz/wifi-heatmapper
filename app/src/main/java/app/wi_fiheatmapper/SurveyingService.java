@@ -25,31 +25,50 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Service collect location and network data for create signal heatmap.
+ */
 public class SurveyingService extends Service {
 
-    public static final int LOCAION_INTERVAL = 1000;
-    public static final int LOCATION_FASTEST_INTERVAL = 500;
-    private final IBinder mBinder = new LocalBinder();
-    private final List<ServiceListener> mListeners = new ArrayList<>();
-    private final LocationListener mLocationListener = new LocationListener();
-    private final Map<Location, Integer> mHeatmapData = new HashMap<>();
-    private ScanResultReceiver mScanReceiver;
-    private GoogleApiClient mGoogleApiClient;
-    private String mSurveyedSsid;
-    private Location mLastLocation;
-    private int mLastSignalLevel;
+    // Setting for location Google location provider.
+    private static final int LOCAION_INTERVAL = 1000;
+    private static final int LOCATION_FASTEST_INTERVAL = 500;
 
-    @Nullable
-    @Override
-    public IBinder onBind(Intent intent) {
-        return mBinder;
-    }
+    private final IBinder mBinder = new LocalBinder();
+    private final List<ServiceListener> mServiceListeners = new ArrayList<>();
+    private final LocationListener mLocationListener = new LocationListener();
+
+    /**
+     * Heatmap data consist of geolocation and signal strenght for that location.
+     * Signal strenght can be updated for last stored location because location provider can send
+     * new location only after device move by some distance from previous location.
+     */
+    private final Map<Location, Integer> mHeatmapData = new HashMap<>();
+
+    private WiFiScanReceiver mWiFiScanReceiver;
+    private GoogleApiClient mGoogleApiClient;
+
+    /**
+     * SSID selected for surveying.
+     */
+    private String mSurveyedSsid;
+
+    /**
+     * Last collected data.
+     */
+    private Location mLastLocation;
+
+    /**
+     * If no signal detected than {@link Integer#MIN_VALUE} is used.
+     */
+    private int mLastRssi = Integer.MIN_VALUE;
 
     @Override
     public void onCreate() {
         super.onCreate();
 
-        registerReceiver(mScanReceiver = new ScanResultReceiver(),
+        // Start receiving surrouding Wi-Fi informations.
+        registerReceiver(mWiFiScanReceiver = new WiFiScanReceiver(),
                          new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
 
         mGoogleApiClient = new GoogleApiClient.Builder(this)
@@ -67,56 +86,106 @@ public class SurveyingService extends Service {
 
         mGoogleApiClient.disconnect();
 
-        unregisterReceiver(mScanReceiver);
+        unregisterReceiver(mWiFiScanReceiver);
     }
 
-    public void registerListener(ServiceListener listener) {
-        mListeners.add(listener);
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return mBinder;
+    }
 
-        listener.onHeatmapDataUpdated(mHeatmapData);
+    /**
+     * Register listener for this service and provide heatmap data for this listener.
+     *
+     * @param listener Listener for listening on events from this service.
+     */
+    public void registerListener(ServiceListener listener) {
+        if (listener == null) return;
+
+        mServiceListeners.add(listener);
+
+        listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
     }
 
     public void unregisterListener(ServiceListener listener) {
-        mListeners.remove(listener);
+        mServiceListeners.remove(listener);
     }
 
+    /**
+     * Set for which SSID will be collected heatmap data.
+     * This also start receiving location updates.
+     *
+     * @param ssid SSID of desired network
+     */
     public void surveySsid(String ssid) {
         mSurveyedSsid = ssid;
 
+        // We want high accuracy with updates every 1.5 meter.
         LocationRequest locReq = new LocationRequest().setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
                                                       .setInterval(LOCAION_INTERVAL)
                                                       .setFastestInterval(LOCATION_FASTEST_INTERVAL)
-                                                      .setSmallestDisplacement(getResources().getInteger(R.integer.radius));
+                                                      .setSmallestDisplacement(getResources().getInteger(R.integer.diameter) / 2f);
         LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, locReq,
                                                                  mLocationListener);
     }
 
+    /**
+     * Get last location from location provider;
+     *
+     * @return
+     */
     public Location getLastLocation() {
         return LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
     }
 
+    /**
+     * Update heatmap with lastest data and notify listeners.
+     */
     private void updateHeatmap() {
         if (mLastLocation == null) return;
 
-        mHeatmapData.put(mLastLocation, mLastSignalLevel);
+        mHeatmapData.put(mLastLocation, mLastRssi);
 
-        for (ServiceListener listener : mListeners) {
-            listener.onHeatmapDataUpdated(mHeatmapData);
+        for (ServiceListener listener : mServiceListeners) {
+            listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
         }
     }
 
     public interface ServiceListener {
-        void onScanCompleted(List<ScanResult> scanResults);
+        /**
+         * Called if scanning of surrounding network is complete.
+         *
+         * @param scanResults Result of scan.
+         */
+        void onWiFiScanCompleted(List<ScanResult> scanResults);
+
+        /**
+         * Called if new info about RSSI is available about selected network.
+         *
+         * @param surveyedSsid SSID of surveyed network.
+         * @param rssi         Signal strenght.
+         */
+        void onSurveyedWiFiUpdated(String surveyedSsid, int rssi);
 
         void onHeatmapDataUpdated(Map<Location, Integer> heatmapData);
 
-        void onLocationUpdated(Location lastLocation);
+        /**
+         * Called if last location from provider is updated.
+         *
+         * @param lastLocation Last loaction.
+         */
+        void onLastLocationUpdated(Location lastLocation);
     }
 
+    /**
+     * This is used as connection between service and clients (activity etc.).
+     * It's kind of helper to get rid of bounding a unbounding boilerplate code.
+     */
     public static class SurveyingServiceConnection implements ServiceConnection {
+        private final ServiceListener mListener;
         private SurveyingService mService;
         private boolean mBounded;
-        private ServiceListener mListener;
 
         public SurveyingServiceConnection(ServiceListener listener) {
             mListener = listener;
@@ -153,21 +222,33 @@ public class SurveyingService extends Service {
         }
     }
 
+    public class LocalBinder extends Binder {
+
+        SurveyingService getService() {
+            return SurveyingService.this;
+        }
+    }
+
+    /**
+     * Callback for GoogleApiClient. Notify service listeners about last know location after connect.
+     */
     private class GApiClientConnCallback implements GoogleApiClient.ConnectionCallbacks {
 
         @Override
         public void onConnected(@Nullable Bundle bundle) {
-            for (ServiceListener listener : mListeners) {
-                listener.onLocationUpdated(getLastLocation());
+            for (ServiceListener listener : mServiceListeners) {
+                listener.onLastLocationUpdated(getLastLocation());
             }
         }
 
         @Override
         public void onConnectionSuspended(int i) {
         }
-
     }
 
+    /**
+     * Listener for location updates from provider.
+     */
     private class LocationListener implements com.google.android.gms.location.LocationListener {
 
         @Override
@@ -178,10 +259,15 @@ public class SurveyingService extends Service {
         }
     }
 
-    private class ScanResultReceiver extends BroadcastReceiver {
+    /**
+     * Receiver of surrounding networks status.
+     * onReceive is called if scan is complate so we can get result by {@link WifiManager#getScanResults}.
+     * Than start new scan.
+     */
+    private class WiFiScanReceiver extends BroadcastReceiver {
         private WifiManager mWifiManager;
 
-        public ScanResultReceiver() {
+        public WiFiScanReceiver() {
             mWifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
             mWifiManager.setWifiEnabled(true);
             mWifiManager.startScan();
@@ -189,27 +275,34 @@ public class SurveyingService extends Service {
 
         @Override
         public void onReceive(Context c, Intent intent) {
-            for (ServiceListener listener : mListeners) {
-                listener.onScanCompleted(mWifiManager.getScanResults());
+            for (ServiceListener listener : mServiceListeners) {
+                listener.onWiFiScanCompleted(mWifiManager.getScanResults());
             }
 
+            if (mSurveyedSsid == null) {
+                // No network selected yet.
+                mWifiManager.startScan();
+                return;
+            }
+
+            // Get RSSI of surveyed network if is in range.
+            int rssi = Integer.MIN_VALUE;
             for (ScanResult scanResult : mWifiManager.getScanResults()) {
                 String scanedSsid = !TextUtils.isEmpty(scanResult.SSID) ? scanResult.SSID : scanResult.BSSID;
-
                 if (scanedSsid.equals(mSurveyedSsid)) {
-                    mLastSignalLevel = scanResult.level;
-                    updateHeatmap();
+                    rssi = scanResult.level;
                     break;
                 }
             }
 
-            mWifiManager.startScan();
-        }
-    }
+            mLastRssi = rssi;
+            updateHeatmap();
 
-    public class LocalBinder extends Binder {
-        SurveyingService getService() {
-            return SurveyingService.this;
+            for (ServiceListener listener : mServiceListeners) {
+                listener.onSurveyedWiFiUpdated(mSurveyedSsid, mLastRssi);
+            }
+
+            mWifiManager.startScan();
         }
     }
 }

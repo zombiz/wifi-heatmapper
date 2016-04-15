@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">Wi-Fi Heatmapper</string>
-    <string name="title_activity_main">Wi-Fi Heatmapper</string>
+
     <string name="signal_strength">%1$s dBm</string>
+    <string name="current_wifi">%1$s %2$d dBm</string>
+    <string name="network_not_in_range">%1$s ---</string>
 </resources>

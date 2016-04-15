@@ -15,6 +15,9 @@ import android.widget.ArrayAdapter;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Dialog for selecting SSID from surrounding networks.
+ */
 public class SsidPickerDialog extends DialogFragment {
 
     public static final String TAG = SsidPickerDialog.class.getSimpleName();
@@ -42,7 +45,7 @@ public class SsidPickerDialog extends DialogFragment {
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
         return new AlertDialog.Builder(getActivity())
-                .setAdapter(mSsidAdapter, new OnSsidSelectedListener())
+                .setAdapter(mSsidAdapter, new SsidSelectionListener())
                 .create();
     }
 
@@ -65,10 +68,15 @@ public class SsidPickerDialog extends DialogFragment {
     }
 
     public interface DialogCallback {
+        /**
+         * Called when SSID selected from list.
+         *
+         * @param SSID Selected SSID
+         */
         void onSsidSelected(String SSID);
     }
 
-    private class OnSsidSelectedListener implements DialogInterface.OnClickListener {
+    private class SsidSelectionListener implements DialogInterface.OnClickListener {
         @Override
         public void onClick(DialogInterface dialog, int which) {
             if (mCallback != null) {
@@ -78,8 +86,11 @@ public class SsidPickerDialog extends DialogFragment {
     }
 
     private class SurveyingServiceListener implements SurveyingService.ServiceListener {
+
         @Override
-        public void onScanCompleted(List<ScanResult> scanResults) {
+        public void onWiFiScanCompleted(List<ScanResult> scanResults) {
+            // Create adapter of unique SSIDs.
+            mSsidAdapter.clear();
             for (ScanResult scanResult : scanResults) {
                 String ssid = !TextUtils.isEmpty(scanResult.SSID) ? scanResult.SSID : scanResult.BSSID;
                 if (mSsidAdapter.getPosition(ssid) < 0) {
@@ -93,7 +104,11 @@ public class SsidPickerDialog extends DialogFragment {
         }
 
         @Override
-        public void onLocationUpdated(Location lastLocation) {
+        public void onLastLocationUpdated(Location lastLocation) {
+        }
+
+        @Override
+        public void onSurveyedWiFiUpdated(String surveyedSsid, int rssi) {
         }
     }
 }
