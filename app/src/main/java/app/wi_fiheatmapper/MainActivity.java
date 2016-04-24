@@ -238,11 +238,11 @@ public class MainActivity extends AppCompatActivity {
         int red = 0xFF;
         int green = 0xFF;
         if (relativeSignal >= 0.5) {
-            // To half of range add green to red to make orange.
-            green = (int) ((1 - relativeSignal) * 0xFF / 0.5);
-        } else {
             // From half substract red from green to make full green.
-            red = (int) ((relativeSignal) * 0xFF / 0.5);
+            red = (int) ((1 - relativeSignal) * 0xFF / 0.5);
+        } else {
+            // To half of range add green to red to make orange.
+            green = (int) ((relativeSignal) * 0xFF / 0.5);
         }
 
         return Color.rgb(red, green, 0);
