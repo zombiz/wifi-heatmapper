@@ -105,7 +105,7 @@ public class SurveyingService extends Service {
 
         mServiceListeners.add(listener);
 
-        listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
+        listener.onHeatmapDataUpdated(getHeatmapData());
     }
 
     public void unregisterListener(ServiceListener listener) {
@@ -140,6 +140,14 @@ public class SurveyingService extends Service {
     }
 
     /**
+     * Get actual heatmap data.
+     * @return Map with heatmap data.
+     */
+    public Map<Location, Integer> getHeatmapData() {
+        return new HashMap<>(mHeatmapData);
+    }
+
+    /**
      * Update heatmap with lastest data and notify listeners.
      */
     private void updateHeatmap() {
@@ -148,7 +156,7 @@ public class SurveyingService extends Service {
         mHeatmapData.put(mLastLocation, mLastRssi);
 
         for (ServiceListener listener : mServiceListeners) {
-            listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
+            listener.onHeatmapDataUpdated(getHeatmapData());
         }
     }
 
