@@ -105,7 +105,7 @@ public class SurveyingService extends Service {
 
         mServiceListeners.add(listener);
 
-        listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
+        listener.onHeatmapDataUpdated(getHeatmapData());
     }
 
     public void unregisterListener(ServiceListener listener) {
@@ -140,15 +140,25 @@ public class SurveyingService extends Service {
     }
 
     /**
-     * Update heatmap with lastest data and notify listeners.
+     * Get actual heatmap data.
+     * @return Map with heatmap data.
      */
-    private void updateHeatmap() {
-        if (mLastLocation == null) return;
+    public Map<Location, Integer> getHeatmapData() {
+        return new HashMap<>(mHeatmapData);
+    }
 
-        mHeatmapData.put(mLastLocation, mLastRssi);
+    /**
+     * Update heatmap with lastest data and notify listeners.
+     * @param location
+     */
+    private void updateHeatmap(Location location) {
+        if (location == null || location == mLastLocation || mLastRssi == Integer.MIN_VALUE) return;
+
+        mHeatmapData.put(location, mLastRssi);
+        mLastLocation = location;
 
         for (ServiceListener listener : mServiceListeners) {
-            listener.onHeatmapDataUpdated(new HashMap<>(mHeatmapData));
+            listener.onHeatmapDataUpdated(getHeatmapData());
         }
     }
 
@@ -214,7 +224,8 @@ public class SurveyingService extends Service {
         }
 
         public void unbound(Context context) {
-            mService.unregisterListener(mListener);
+            if (mService != null) mService.unregisterListener(mListener);
+
             if (mBounded) {
                 mBounded = false;
                 context.unbindService(this);
@@ -253,9 +264,7 @@ public class SurveyingService extends Service {
 
         @Override
         public void onLocationChanged(Location location) {
-            mLastLocation = location;
-
-            updateHeatmap();
+            updateHeatmap(location);
         }
     }
 
@@ -296,7 +305,6 @@ public class SurveyingService extends Service {
             }
 
             mLastRssi = rssi;
-            updateHeatmap();
 
             for (ServiceListener listener : mServiceListeners) {
                 listener.onSurveyedWiFiUpdated(mSurveyedSsid, mLastRssi);
