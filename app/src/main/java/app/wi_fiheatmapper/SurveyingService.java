@@ -149,11 +149,13 @@ public class SurveyingService extends Service {
 
     /**
      * Update heatmap with lastest data and notify listeners.
+     * @param location
      */
-    private void updateHeatmap() {
-        if (mLastLocation == null) return;
+    private void updateHeatmap(Location location) {
+        if (location == null || location == mLastLocation || mLastRssi == Integer.MIN_VALUE) return;
 
-        mHeatmapData.put(mLastLocation, mLastRssi);
+        mHeatmapData.put(location, mLastRssi);
+        mLastLocation = location;
 
         for (ServiceListener listener : mServiceListeners) {
             listener.onHeatmapDataUpdated(getHeatmapData());
@@ -222,7 +224,8 @@ public class SurveyingService extends Service {
         }
 
         public void unbound(Context context) {
-            mService.unregisterListener(mListener);
+            if (mService != null) mService.unregisterListener(mListener);
+
             if (mBounded) {
                 mBounded = false;
                 context.unbindService(this);
@@ -261,9 +264,7 @@ public class SurveyingService extends Service {
 
         @Override
         public void onLocationChanged(Location location) {
-            mLastLocation = location;
-
-            updateHeatmap();
+            updateHeatmap(location);
         }
     }
 
@@ -304,7 +305,6 @@ public class SurveyingService extends Service {
             }
 
             mLastRssi = rssi;
-            updateHeatmap();
 
             for (ServiceListener listener : mServiceListeners) {
                 listener.onSurveyedWiFiUpdated(mSurveyedSsid, mLastRssi);
